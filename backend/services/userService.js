@@ -1,31 +1,60 @@
-// services/userService.js
-const { User } = require("../models");
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
+const { cognito, CLIENT_ID, generateSecretHash } = require("../config/cognito");
 
-exports.registerUser = async ({ username, email, password }) => {
-  const existingUser = await User.findOne({ where: { email } });
-  if (existingUser) {
-    throw new Error("Email already exists");
+exports.registerUser = async ({ email, password }) => {
+  const params = {
+    ClientId: CLIENT_ID,
+    Username: email,
+    Password: password,
+    SecretHash: generateSecretHash(email),
+    UserAttributes: [
+      {
+        Name: "email",
+        Value: email
+      }
+    ]
+  };
+
+  try {
+    const data = await cognito.signUp(params).promise();
+    return { userSub: data.UserSub, message: "OTP sent to email for verification" };
+  } catch (err) {
+    throw new Error(err.message);
   }
+};
 
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const user = await User.create({ username, email, password: hashedPassword });
+exports.confirmUser = async ({ email, confirmationCode }) => {
+  const params = {
+    ClientId: CLIENT_ID,
+    Username: email,
+    ConfirmationCode: confirmationCode,
+    SecretHash: generateSecretHash(email)
+  };
 
-  return user;
+  try {
+    await cognito.confirmSignUp(params).promise();
+    return { message: "Email verified successfully" };
+  } catch (err) {
+    throw new Error(err.message);
+  }
 };
 
 exports.loginUser = async ({ email, password }) => {
-  const user = await User.findOne({ where: { email } });
-  if (!user) {
-    throw new Error("User not found");
-  }
+  const params = {
+    AuthFlow: "USER_PASSWORD_AUTH",
+    ClientId: CLIENT_ID,
+    AuthParameters: {
+      USERNAME: email,
+      PASSWORD: password,
+      SECRET_HASH: generateSecretHash(email)
+    }
+  };
 
-  const match = await bcrypt.compare(password, user.password);
-  if (!match) {
-    throw new Error("Invalid credentials");
+  try {
+    const data = await cognito.initiateAuth(params).promise();
+    return {
+      token: data.AuthenticationResult.IdToken
+    };
+  } catch (err) {
+    throw new Error("Invalid credentials or unconfirmed email");
   }
-
-  const token = jwt.sign({ id: user.id }, "super", { expiresIn: "1h" });
-  return { token };
 };
